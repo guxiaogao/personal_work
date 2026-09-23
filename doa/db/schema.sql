@@ -176,6 +176,68 @@ CREATE TABLE IF NOT EXISTS relation_inst (
 CREATE INDEX IF NOT EXISTS idx_relation_inst_type ON relation_inst(relation_type_id);
 CREATE INDEX IF NOT EXISTS idx_relation_inst_src  ON relation_inst(src_id);
 
+-- ---------------------------------------------------------------- L3 冲突与裁决
+
+-- 被拒的变更集。专利原文未涉及校验失败后的处置，这部分是自行设计。
+CREATE TABLE IF NOT EXISTS conflict_report (
+    id              BIGSERIAL PRIMARY KEY,
+    branch          TEXT   NOT NULL,
+    base_version_id BIGINT NOT NULL REFERENCES schema_version(version_id),
+    delta_json      JSONB  NOT NULL,
+    cost_tier_i     TEXT   NOT NULL DEFAULT 'L3',
+    cost_tier_x     TEXT   NOT NULL DEFAULT 'UNGRADED',
+    -- 违规总数可能远大于明细条数：明细封顶，总数如实记录
+    violation_count INT    NOT NULL DEFAULT 0,
+    truncated       BOOLEAN NOT NULL DEFAULT FALSE,
+    status          TEXT   NOT NULL DEFAULT 'open',
+    created_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
+    CONSTRAINT conflict_status_valid CHECK (status IN ('open','resolved'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_conflict_report_status ON conflict_report(status);
+
+CREATE TABLE IF NOT EXISTS conflict_violation (
+    id               BIGSERIAL PRIMARY KEY,
+    report_id        BIGINT NOT NULL REFERENCES conflict_report(id) ON DELETE CASCADE,
+    kind             TEXT   NOT NULL,
+    entity_type_name TEXT,
+    attribute_name   TEXT,
+    instance_id      BIGINT,
+    subject_key      TEXT,      -- 业务主键（证券代码），比 instance_id 可读
+    current_value    TEXT,
+    constraint_desc  TEXT,
+    CONSTRAINT violation_kind_valid
+        CHECK (kind IN ('missing_required','data_loss','type_mismatch','orphan_instance'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_conflict_violation_report ON conflict_violation(report_id);
+
+-- 按类型的聚合统计。必须独立存表：明细封顶后，聚合无法从 conflict_violation 恢复，
+-- 而「违规是否集中于某一类型」正是裁决时判断该不该把约束下推到子类型的依据。
+CREATE TABLE IF NOT EXISTS conflict_type_summary (
+    report_id        BIGINT NOT NULL REFERENCES conflict_report(id) ON DELETE CASCADE,
+    entity_type_name TEXT   NOT NULL,
+    kind             TEXT   NOT NULL,
+    violation_count  INT    NOT NULL,
+    PRIMARY KEY (report_id, entity_type_name, kind)
+);
+
+-- 裁决记录。动作三选一，理由必填——「为何这么裁」是审计的核心
+CREATE TABLE IF NOT EXISTS adjudication (
+    id                 BIGSERIAL PRIMARY KEY,
+    report_id          BIGINT NOT NULL REFERENCES conflict_report(id) ON DELETE CASCADE,
+    action             TEXT   NOT NULL,
+    actor              TEXT   NOT NULL,
+    rationale          TEXT   NOT NULL,
+    result_version_id  BIGINT REFERENCES schema_version(version_id),  -- 改本体后的新版本
+    affected_instances INT    NOT NULL DEFAULT 0,                     -- 改数据触碰的实例数
+    created_at         TIMESTAMPTZ NOT NULL DEFAULT now(),
+    CONSTRAINT adjudication_action_valid
+        CHECK (action IN ('amend_ontology','amend_data','abandon'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_adjudication_report ON adjudication(report_id);
+
 -- ---------------------------------------------------------------- 检索层（W4）
 
 CREATE TABLE IF NOT EXISTS hyperedge (

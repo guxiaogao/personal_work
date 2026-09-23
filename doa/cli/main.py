@@ -14,6 +14,7 @@ from rich.table import Table
 from rich.tree import Tree
 
 from doa.db import connect, init_schema
+from doa.evolve import ConflictStore
 from doa.reasoner import ReasonerClient, ReasonerUnavailable
 from doa.sr import SchemaRegistry
 from doa.sr.delta import parse_deltas
@@ -23,6 +24,8 @@ from doa.sr.registry import MAIN, SchemaError
 app = typer.Typer(help="动态本体演化引擎", no_args_is_help=True)
 schema_app = typer.Typer(help="本体模式与版本管理", no_args_is_help=True)
 app.add_typer(schema_app, name="schema")
+conflict_app = typer.Typer(help="L3 冲突报告与人工裁决", no_args_is_help=True)
+app.add_typer(conflict_app, name="conflict")
 
 console = Console()
 
@@ -229,6 +232,100 @@ def check(
 
     if not res.ok:
         raise typer.Exit(1)
+
+
+@conflict_app.command("list")
+def conflict_list() -> None:
+    """列出待裁决的 L3 冲突报告。"""
+    store = ConflictStore(connect())
+    reports = store.open_reports()
+    if not reports:
+        console.print("没有待裁决的冲突报告")
+        return
+    t = Table(title="待裁决冲突")
+    for col in ("报告", "分支", "基版本", "违规数", "明细截断"):
+        t.add_column(col)
+    for r in reports:
+        t.add_row(
+            f"#{r.report_id}",
+            r.branch,
+            str(r.base_version_id),
+            str(r.violation_count),
+            "是" if r.truncated else "否",
+        )
+    console.print(t)
+
+
+@conflict_app.command("show")
+def conflict_show(
+    report_id: int = typer.Argument(..., help="冲突报告 id"),
+    limit: int = typer.Option(20, "-n", "--limit", help="展示前 N 条明细"),
+) -> None:
+    """展示冲突报告明细与按类型的聚合。"""
+    store = ConflictStore(connect())
+    r = store.get(report_id)
+    if r is None:
+        console.print(f"[red]报告不存在[/red] #{report_id}")
+        raise typer.Exit(1)
+
+    console.print(r.summary() + f"  状态={r.status}")
+
+    agg = r.by_entity_type()
+    if agg:
+        # 违规集中于单一类型 ⇒ 通常该走「约束下推到子类型」而非放宽全局约束
+        t = Table(title="按实体类型聚合")
+        t.add_column("类型")
+        t.add_column("违规数")
+        for k, v in sorted(agg.items(), key=lambda kv: -kv[1]):
+            t.add_row(k, str(v))
+        console.print(t)
+
+    if r.violations:
+        console.print(f"\n明细（前 {min(limit, len(r.violations))} 条）：")
+        for v in r.violations[:limit]:
+            console.print(f"  {v.describe()}")
+
+    for a in store.adjudications(report_id):
+        console.print(
+            f"\n[dim]裁决[/dim] {a['action']} by {a['actor']}: {a['rationale']}"
+        )
+
+
+@conflict_app.command("adjudicate")
+def conflict_adjudicate(
+    report_id: int = typer.Argument(...),
+    action: str = typer.Option(
+        ..., "-a", "--action",
+        help="amend_ontology（改本体）| amend_data（改数据）| abandon（放弃）",
+    ),
+    rationale: str = typer.Option(..., "-r", "--rationale", help="裁决理由，必填"),
+    actor: str = typer.Option("human", "--actor"),
+    result_version: int | None = typer.Option(None, "--result-version"),
+    affected: int = typer.Option(0, "--affected", help="改数据触碰的实例数"),
+) -> None:
+    """登记裁决结果。
+
+    本命令只记录裁决，不执行动作——改本体走 doa schema commit，改数据走 Assimilator。
+    职责分离便于审计：裁决记录与实际变更各有出处。
+    """
+    if action not in ("amend_ontology", "amend_data", "abandon"):
+        console.print(f"[red]未知动作[/red] {action}")
+        raise typer.Exit(1)
+
+    store = ConflictStore(connect())
+    try:
+        aid = store.adjudicate(
+            report_id,
+            action=action,  # type: ignore[arg-type]
+            actor=actor,
+            rationale=rationale,
+            result_version_id=result_version,
+            affected_instances=affected,
+        )
+    except ValueError as e:
+        console.print(f"[red]拒绝[/red] {e}")
+        raise typer.Exit(1)
+    console.print(f"[green]已裁决[/green] 报告 #{report_id} → {action}（记录 #{aid}）")
 
 
 if __name__ == "__main__":

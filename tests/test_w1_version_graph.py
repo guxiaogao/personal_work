@@ -258,7 +258,13 @@ def test_derived_attribute_cannot_be_required(sr):
 
 def test_derived_attribute_index_flag_roundtrip(sr):
     """派生属性入不入索引是二维代价的开关，必须能读回。"""
-    sr.commit([AddEntityType(name="Company")])
+    sr.commit(
+        [
+            AddEntityType(name="Company"),
+            # 派生表达式引用的属性必须先存在——提交时即校验
+            AddAttributeType(entity_type_name="Company", name="revenue", datatype="number"),
+        ]
+    )
     sr.commit(
         [
             AddAttributeType(

@@ -125,7 +125,12 @@ def test_snapshot_exports_and_passes_reasoner(sr, client):
 
 def test_derived_attribute_excluded_by_default(sr, client):
     """派生属性无存量值，默认不入 OWL——否则 minCardinality 类约束会误报。"""
-    sr.commit([AddEntityType(name="Company")])
+    sr.commit(
+        [
+            AddEntityType(name="Company"),
+            AddAttributeType(entity_type_name="Company", name="revenue", datatype="number"),
+        ]
+    )
     sr.commit(
         [
             AddAttributeType(

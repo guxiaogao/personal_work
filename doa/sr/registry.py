@@ -19,6 +19,7 @@ import psycopg
 from psycopg.rows import dict_row
 from psycopg.types.json import Jsonb
 
+from doa.derive import ExpressionError, dependencies
 from doa.sr.delta import (
     AddAttributeType,
     AddEntityType,
@@ -285,6 +286,10 @@ class SchemaRegistry:
                     raise SchemaError(f"AttributeType 已存在: {d.entity_type_name}.{d.name}")
                 if d.derivation_expr and d.min_cardinality > 0:
                     raise SchemaError("派生属性不能为必填：它没有存量值可填")
+                if d.derivation_expr:
+                    self._check_derivation(
+                        cur, d.entity_type_name, d.name, d.derivation_expr, scope
+                    )
                 cur.execute(
                     """INSERT INTO attribute_type
                            (entity_type_name, name, datatype, min_cardinality,
@@ -405,6 +410,40 @@ class SchemaRegistry:
 
             case _:
                 raise SchemaError(f"未知算子: {d!r}")
+
+    def _check_derivation(
+        self,
+        cur: psycopg.Cursor,
+        entity: str,
+        attr_name: str,
+        expr: str,
+        scope: list[int],
+    ) -> None:
+        """校验派生表达式：语法、自引用、依赖存在性、禁止引用其他派生属性。
+
+        在**提交时**校验而非求值时，是为了让「坏 schema 进不来」——
+        求值阶段只该遇到数据问题，不该遇到定义问题。
+        """
+        try:
+            deps = dependencies(expr)
+        except ExpressionError as e:
+            raise SchemaError(f"派生表达式非法 ({entity}.{attr_name}): {e}") from e
+
+        if attr_name in deps.all_names:
+            raise SchemaError(f"派生属性不能引用自身: {entity}.{attr_name}")
+
+        for dep in sorted(deps.all_names):
+            row = self._attr_row(cur, entity, dep, scope)
+            if row is None:
+                raise SchemaError(
+                    f"派生表达式引用了不存在的属性: {entity}.{dep}"
+                    f"（定义于 {entity}.{attr_name}）"
+                )
+            # 依赖图恒为一层：否则分级时要沿依赖链传递失效，且需环检测
+            if row["derivation_expr"] is not None:
+                raise SchemaError(
+                    f"派生属性不能引用其他派生属性: {entity}.{attr_name} → {entity}.{dep}"
+                )
 
     # -------------------------------------------------------------- 可见性查询
 

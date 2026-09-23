@@ -14,8 +14,10 @@ from rich.table import Table
 from rich.tree import Tree
 
 from doa.db import connect, init_schema
+from doa.reasoner import ReasonerClient, ReasonerUnavailable
 from doa.sr import SchemaRegistry
 from doa.sr.delta import parse_deltas
+from doa.sr.owl_export import snapshot_to_owl
 from doa.sr.registry import MAIN, SchemaError
 
 app = typer.Typer(help="动态本体演化引擎", no_args_is_help=True)
@@ -168,6 +170,65 @@ def show(
         for r in snap["relation_types"]:
             rnode.add(f"{r['name']}: {r['domain_name']} → {r['range_name']}")
     console.print(tree)
+
+
+@schema_app.command("owl")
+def owl(
+    version: int | None = typer.Option(None, "-v", "--version"),
+    branch: str = typer.Option(MAIN, "-b", "--branch"),
+    disjoint_siblings: bool = typer.Option(False, "--disjoint-siblings"),
+    include_derived: bool = typer.Option(False, "--include-derived"),
+    out: Path | None = typer.Option(None, "-o", "--out"),
+) -> None:
+    """导出某版本的 OWL 视图（喂给推理机用）。"""
+    sr = _registry()
+    text = snapshot_to_owl(
+        sr.snapshot(version, branch),
+        disjoint_siblings=disjoint_siblings,
+        include_derived=include_derived,
+    )
+    if out:
+        out.write_text(text, encoding="utf-8")
+        console.print(f"[green]已写入[/green] {out}")
+    else:
+        console.print(text, markup=False, highlight=False)
+
+
+@schema_app.command("check")
+def check(
+    version: int | None = typer.Option(None, "-v", "--version"),
+    branch: str = typer.Option(MAIN, "-b", "--branch"),
+    disjoint_siblings: bool = typer.Option(False, "--disjoint-siblings"),
+) -> None:
+    """用 HermiT 检查某版本的逻辑一致性与不可满足类。"""
+    sr = _registry()
+    snap = sr.snapshot(version, branch)
+    text = snapshot_to_owl(snap, disjoint_siblings=disjoint_siblings)
+
+    try:
+        res = ReasonerClient().consistency(text)
+    except ReasonerUnavailable as e:
+        console.print(f"[red]推理服务不可用[/red] {e}")
+        raise typer.Exit(2)
+
+    console.print(f"version {snap['version_id']}  "
+                  f"[dim]{res.axiom_count} 公理 / {res.class_count} 类 / "
+                  f"{res.reasoner_time_ms}ms[/dim]")
+    if res.consistent:
+        console.print("一致性  [green]通过[/green]")
+    else:
+        console.print("一致性  [red]不通过[/red]（存在逻辑矛盾）")
+
+    if res.unsatisfiable_classes:
+        # 一致但有不可满足类：本体没矛盾，但这些类永远不可能有实例
+        console.print(f"不可满足类  [red]{len(res.unsatisfiable_classes)} 个[/red]")
+        for c in res.unsatisfiable_classes:
+            console.print(f"  {c}")
+    elif res.consistent:
+        console.print("不可满足类  [green]无[/green]")
+
+    if not res.ok:
+        raise typer.Exit(1)
 
 
 if __name__ == "__main__":

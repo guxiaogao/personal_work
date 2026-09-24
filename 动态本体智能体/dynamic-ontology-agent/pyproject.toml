@@ -1,0 +1,29 @@
+[project]
+name = "dynamic-ontology-agent"
+version = "0.1.0"
+description = "Incremental dynamic-ontology evolution engine with cost-tiered change admission"
+requires-python = ">=3.11"
+dependencies = [
+    "psycopg[binary]>=3.2",
+    "pydantic>=2.9",
+    "typer>=0.15",
+    "rich>=13.9",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.3",
+]
+
+[project.scripts]
+doa = "doa.cli.main:app"
+
+[build-system]
+requires = ["setuptools>=75"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["doa*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

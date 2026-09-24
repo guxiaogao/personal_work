@@ -1,0 +1,10 @@
+[
+  {
+    "op": "add_attribute_type",
+    "entity_type_name": "Company",
+    "name": "revenue_yoy",
+    "datatype": "number",
+    "derivation_expr": "revenue / same_period_last_year(revenue) - 1",
+    "index_derived": true
+  }
+]

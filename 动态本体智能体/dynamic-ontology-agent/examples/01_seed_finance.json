@@ -1,0 +1,10 @@
+[
+  {"op": "add_entity_type", "name": "Company", "uri": "urn:doa:Company"},
+  {"op": "add_entity_type", "name": "Filing",  "uri": "urn:doa:Filing"},
+  {"op": "add_attribute_type", "entity_type_name": "Company", "name": "ticker",  "datatype": "string", "min_cardinality": 1},
+  {"op": "add_attribute_type", "entity_type_name": "Company", "name": "revenue", "datatype": "number"},
+  {"op": "add_parser_def", "entity_type_name": "Company", "attribute_name": "revenue", "kind": "regex", "pattern": "^([\\d.]+)亿元?$", "priority": 10},
+  {"op": "add_parser_def", "entity_type_name": "Company", "attribute_name": "revenue", "kind": "regex", "pattern": "^([\\d,]+)$",       "priority": 20},
+  {"op": "add_validator_def", "entity_type_name": "Company", "attribute_name": "ticker", "kind": "regex", "spec": {"pattern": "^[0-9]{6}$"}},
+  {"op": "add_relation_type", "name": "files", "domain_name": "Company", "range_name": "Filing"}
+]

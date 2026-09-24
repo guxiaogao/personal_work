@@ -1,0 +1,14 @@
+{
+  "permissions": {
+    "allow": [
+      "Edit",
+      "Write",
+      "NotebookEdit",
+      "Read",
+      "Bash(npm run *)",
+      "Bash(git *)",
+      "Bash(ls *)",
+      "Bash(cd *)"
+    ]
+  }
+}
